@@ -12,7 +12,7 @@ st.set_page_config(layout="wide", page_title="Net-Zero House Dashboard")
 # --- Configuration for Database and CSV Paths ---
 script_dir = os.path.dirname(os.path.abspath(__file__))
 db_file = 'Net_zero_house_data.db'
-csv_file = 'Net_zero_house_data.csv' # Your CSV file
+csv_file = 'Iko_Dissertation_Final_Dataset.csv' # Your CSV file
 db_path = os.path.join(script_dir, db_file)
 csv_path = os.path.join(script_dir, csv_file)
 

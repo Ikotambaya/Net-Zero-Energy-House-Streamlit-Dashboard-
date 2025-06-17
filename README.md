@@ -1,6 +1,6 @@
 # 🏡 Net-Zero House Data Dashboard
 
-[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](YOUR_STREAMLIT_CLOUD_URL_HERE)
+[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://merylwlsjhhrjwdbniha5r.streamlit.app/)
 
 An interactive Streamlit dashboard designed to visualize and analyze sensor data from a net-zero house, alongside corresponding outdoor environmental conditions. This project aims to provide insights into indoor climate, energy efficiency, and environmental quality.
 

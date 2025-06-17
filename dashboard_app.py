@@ -56,6 +56,7 @@ def create_db_from_csv(csv_filepath, db_filepath):
                 Unit TEXT
             );
         """)
+        # IMPORTANT: Updated HourlyOutdoorReadings schema to match actual CSV columns
         cursor.execute("""
             CREATE TABLE HourlyOutdoorReadings (
                 ReadingID INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -63,12 +64,12 @@ def create_db_from_csv(csv_filepath, db_filepath):
                 Air_temperature REAL,
                 Relative_humidity REAL,
                 Wind_speed REAL,
-                Rain REAL,               -- Changed from Precipitation
+                Rain REAL,               -- Matched to 'Rain' in CSV
                 Solar_radiation REAL,
-                Lighting REAL,           -- New column
-                outdoor_dew_point REAL,  -- New column
-                Outdoor_Heat_Index REAL  -- New column
-                -- Removed Wind_direction, Barometric_pressure, Outdoor_CO2 as they are not in CSV
+                Lighting REAL,           -- Matched to 'Lighting' in CSV
+                outdoor_dew_point REAL,  -- Matched to 'outdoor_dew_point' in CSV
+                Outdoor_Heat_Index REAL  -- Matched to 'Outdoor_Heat_Index' in CSV
+                -- Removed Wind_direction, Barometric_pressure, Outdoor_CO2 as they are not in your CSV
             );
         """)
         cursor.execute("""
@@ -91,53 +92,32 @@ def create_db_from_csv(csv_filepath, db_filepath):
         progress_bar.progress(40)
         time.sleep(0.1)
 
-        # DEBUG: Print columns to verify
-        # st.write("Debug: Columns in CSV:", df.columns.tolist())
-
         # Populate Zones and Measurements tables
         zones = {} # To map zone names to IDs
         measurements = {} # To map measurement names to IDs
 
         # Dynamically find zone and measurement columns in CSV
-        # Adjusted to exclude known outdoor-only columns that are not Z_M format
-        # and other analysis columns like 'Cooling', 'Heating'
-        # This list should contain only columns like 'Z1_temp', 'Z12+13_CO2'
+        # We filter for columns that start with a 'Z' and contain an underscore,
+        # indicating they are likely zone-specific measurements like 'Z1_temp'.
+        zone_prefixes = [
+            'Z1','Z2','Z3','Z4','Z5',
+            'Z11','Z12','Z15','Z17',
+            'Z21','Z22','Z24','Z25',
+            'Z31','Z32','Z33'
+        ]
+        # Build a list of all column names that match the 'ZoneName_MeasurementName' pattern
         zone_measurement_cols = [
             col for col in df.columns
-            if '_' in col and
-            not col.startswith(('Air_temperature', 'Relative_humidity', 'Wind_speed', 'Rain',
-                                'Solar_radiation', 'Lighting', 'outdoor_dew_point', 'Outdoor_Heat_Index',
-                                'Cooling', 'Heating'))
-            and not col.endswith(('_temp_diff', '_RH_diff', '_Heat_Index', '_CO2_AQI',
-                                 '_Condensation_Risk', '_Comfortable_Humidity', '_Overheating_Risk',
-                                 '_dew_point')) # Exclude these derived/outdoor measurements that are Z_M
-        ]
-        # REFINEMENT: Re-evaluate the above filter carefully. The primary filter `'_' in col` is good.
-        # The key is to correctly identify *which* columns are ZONE_MEASUREMENT.
-        # Let's simplify this and then handle the measurement parsing later.
-        # A better approach is to collect *all* potential zone_measurement columns and then process.
-        # Your previous logic for this was actually quite good:
-        zone_measurement_cols_raw = [col for col in df.columns if '_' in col]
-        
-        # Filter for actual ZONE_MEASUREMENT columns based on expected prefixes like 'Z'
-        # This helps exclude "Outdoor_Heat_Index", "outdoor_dew_point" from zone measurements
-        zone_prefixes = ['Z1', 'Z2', 'Z3', 'Z4', 'Z5', 'Z11', 'Z12', 'Z15', 'Z17', 'Z21', 'Z22', 'Z24', 'Z25', 'Z31', 'Z32', 'Z33']
-        zone_measurement_cols = [
-            col for col in zone_measurement_cols_raw
             if any(col.startswith(prefix) for prefix in zone_prefixes) and '_' in col
         ]
 
-
         # Extract unique zone names
         unique_zones = sorted(list(set([col.split('_')[0] for col in zone_measurement_cols])))
-        # DEBUG:
-        # st.write("Debug: Unique zones extracted:", unique_zones)
-
         for i, zone_name in enumerate(unique_zones):
             cursor.execute("INSERT INTO Zones (ZoneName, ZoneDescription) VALUES (?, ?);", (zone_name, f"Zone {zone_name} in Net-Zero House"))
             zones[zone_name] = cursor.lastrowid # Store ZoneID
 
-        # Extract unique measurement names
+        # Extract unique measurement names from the zone columns
         unique_measurements_set = set()
         for col in zone_measurement_cols:
             parts = col.split('_')
@@ -145,59 +125,61 @@ def create_db_from_csv(csv_filepath, db_filepath):
                 measurement_name = '_'.join(parts[1:]) # e.g., 'temp', 'RH', 'CO2', 'valve_opening'
                 unique_measurements_set.add(measurement_name)
 
-        # Add specific outdoor measurements and other known ones with their units
-        # Updated based on your CSV's outdoor columns and new derived measurements
+        # Define known measurements and their units. This list is comprehensive for your CSV.
         known_measurements = {
             'temp': '°C', 'RH': '%', 'CO2': 'ppm',
             'valve_opening': '%', 'window_opening': '%',
             'dew_point': '°C', 'temp_diff': '°C', 'RH_diff': '%',
-            'Heat_Index': '°C', 'CO2_AQI': 'AQI', 'Condensation_Risk': 'Risk',
-            'Comfortable_Humidity': 'Bool', 'Overheating_Risk': 'Risk',
-            # Outdoor Measurements from CSV directly
+            'Heat_Index': '°C', 'CO2_AQI': 'AQI', 'Condensation_Risk': 'Risk', # 'Risk' is a placeholder unit
+            'Comfortable_Humidity': 'Bool', 'Overheating_Risk': 'Risk', # 'Bool' and 'Risk' are placeholder units
+            # Outdoor Measurements from CSV (added explicitly to ensure they are in the Measurements table)
             'Air_temperature': '°C', 'Relative_humidity': '%', 'Wind_speed': 'm/s',
             'Rain': 'mm', 'Solar_radiation': 'W/m²', 'Lighting': 'lux',
             'outdoor_dew_point': '°C', 'Outdoor_Heat_Index': '°C'
         }
 
+        # Insert measurements (both zone and explicit outdoor) into DB
+        # First, add the measurements found in zone_measurement_cols
         for meas_name in sorted(list(unique_measurements_set)):
             unit = known_measurements.get(meas_name, '') # Get unit or empty string if not found
             cursor.execute("INSERT INTO Measurements (MeasurementName, Unit) VALUES (?, ?);", (meas_name, unit))
             measurements[meas_name] = cursor.lastrowid # Store MeasurementID
 
-        # Also insert the specific outdoor measurements that are not Z_M format
-        for meas_name in ['Air_temperature', 'Relative_humidity', 'Wind_speed', 'Rain',
-                          'Solar_radiation', 'Lighting', 'outdoor_dew_point', 'Outdoor_Heat_Index']:
-            if meas_name not in measurements: # Avoid duplicates if 'Air_temperature' was already added via 'temp' etc.
-                unit = known_measurements.get(meas_name, '')
-                cursor.execute("INSERT INTO Measurements (MeasurementName, Unit) VALUES (?, ?);", (meas_name, unit))
-                measurements[meas_name] = cursor.lastrowid
+        # Then, add any explicit outdoor measurements that weren't captured by the zone logic
+        for meas_name_outdoor in ['Air_temperature', 'Relative_humidity', 'Wind_speed', 'Rain',
+                                  'Solar_radiation', 'Lighting', 'outdoor_dew_point', 'Outdoor_Heat_Index']:
+            if meas_name_outdoor not in measurements: # Avoid duplicates
+                unit = known_measurements.get(meas_name_outdoor, '')
+                cursor.execute("INSERT INTO Measurements (MeasurementName, Unit) VALUES (?, ?);", (meas_name_outdoor, unit))
+                measurements[meas_name_outdoor] = cursor.lastrowid
+
 
         conn.commit()
         progress_bar.progress(60)
         time.sleep(0.1)
 
         # Populate HourlyOutdoorReadings
-        # This list must EXACTLY match the columns defined in CREATE TABLE HourlyOutdoorReadings
+        # This list of columns must EXACTLY match the CREATE TABLE HourlyOutdoorReadings DDL
         outdoor_cols_for_db = [
             'Timestamp', 'Air_temperature', 'Relative_humidity', 'Wind_speed',
             'Rain', 'Solar_radiation', 'Lighting', 'outdoor_dew_point', 'Outdoor_Heat_Index'
         ]
         
         # Ensure only columns present in DF are used for insertion
-        # This filters df.columns to match outdoor_cols_for_db
         actual_outdoor_cols_in_csv = [col for col in outdoor_cols_for_db if col in df.columns]
         
-        # Prepare data for insertion, ensuring column order matches the SQL INSERT statement
-        outdoor_data = df[actual_outdoor_cols_in_csv].values.tolist()
+        # IMPORTANT FIX: Convert 'Timestamp' column to string format suitable for SQLite
+        # Create a copy to avoid SettingWithCopyWarning and modify Timestamp
+        outdoor_df_to_insert = df[actual_outdoor_cols_in_csv].copy()
+        outdoor_df_to_insert['Timestamp'] = outdoor_df_to_insert['Timestamp'].dt.strftime('%Y-%m-%d %H:%M:%S')
+        
+        # Now convert the DataFrame to a list of lists for executemany
+        outdoor_data = outdoor_df_to_insert.values.tolist()
 
         # Create placeholders for the INSERT statement
         placeholders = ', '.join(['?' for _ in actual_outdoor_cols_in_csv])
         cols_for_insert = ', '.join(actual_outdoor_cols_in_csv)
         
-        # DEBUG:
-        # st.write(f"Debug: Inserting into HourlyOutdoorReadings with columns: {cols_for_insert}")
-        # st.write(f"Debug: First few rows of outdoor_data: {outdoor_data[:5]}") # Print first 5 rows
-
         cursor.executemany(
             f"INSERT INTO HourlyOutdoorReadings ({cols_for_insert}) VALUES ({placeholders});",
             outdoor_data
@@ -216,9 +198,8 @@ def create_db_from_csv(csv_filepath, db_filepath):
                 measurement_id = measurements.get(measurement_name)
                 value = row[col_name]
 
+                # Only insert if value is not NaN and Zone/Measurement IDs were found
                 if pd.notna(value) and zone_id is not None and measurement_id is not None:
-                    # DEBUG:
-                    # st.write(f"Debug: Inserting zone reading: Time={timestamp}, Zone={zone_name} (ID:{zone_id}), Meas={measurement_name} (ID:{measurement_id}), Value={value}")
                     cursor.execute(
                         "INSERT INTO HourlyZoneReadings (Timestamp, ZoneID, MeasurementID, Value) VALUES (?, ?, ?, ?);",
                         (timestamp, zone_id, measurement_id, value)
@@ -234,6 +215,7 @@ def create_db_from_csv(csv_filepath, db_filepath):
         st.stop()
     except Exception as e:
         st.error(f"An error occurred during database creation: {e}")
+        st.exception(e) # Display full exception for debugging
         st.stop()
     finally:
         if conn:
@@ -295,21 +277,21 @@ st.markdown("Explore hourly sensor data from a net-zero house, alongside outdoor
 # --- Sidebar for User Selections ---
 st.sidebar.header("Dashboard Controls")
 
+# Ensure 'Z1' is handled if it's not present or the first option
+default_zone_index = zone_names.index('Z1') if 'Z1' in zone_names else (0 if zone_names else None)
 selected_zone_name = st.sidebar.selectbox(
     "Select a Zone:",
     options=zone_names,
-    index=zone_names.index('Z1') if 'Z1' in zone_names else (0 if zone_names else None)
+    index=default_zone_index
 )
 selected_zone_id = zones_df[zones_df['ZoneName'] == selected_zone_name]['ZoneID'].iloc[0] if selected_zone_name else None
 
-
-# Populate measurement options dynamically
-# Ensure only measurements that exist for the selected zone type are shown,
-# or for simplicity, show all detected measurements
+# Ensure 'temp' is handled if it's not present or the first option
+default_measurement_index = measurement_names.index('temp') if 'temp' in measurement_names else (0 if measurement_names else None)
 selected_measurement_name = st.sidebar.selectbox(
     "Select a Measurement Type for Zone Data:",
     options=measurement_names,
-    index=measurement_names.index('temp') if 'temp' in measurement_names else (0 if measurement_names else None)
+    index=default_measurement_index
 )
 selected_measurement_info = measurements_df[
     (measurements_df['MeasurementName'] == selected_measurement_name)
@@ -325,7 +307,7 @@ st.markdown("---")
 st.subheader("Key Performance Indicators (KPIs)")
 kpi_col1, kpi_col2, kpi_col3 = st.columns(3)
 
-# Updated KPI for Avg. Outdoor Temp - uses Air_temperature
+# KPI for Avg. Outdoor Temp - uses Air_temperature
 avg_outdoor_temp = get_data_from_db("SELECT AVG(Air_temperature) FROM HourlyOutdoorReadings;").iloc[0,0]
 if pd.notna(avg_outdoor_temp):
     kpi_col1.metric("Avg. Outdoor Temp (All Time)", f"{avg_outdoor_temp:.2f} °C")
@@ -386,6 +368,7 @@ if selected_zone_id is not None and not measurements_df.empty:
         zone_temp_df['ReadingHour'] = pd.to_datetime(zone_temp_df['ReadingHour'])
         outdoor_temp_df_plot['ReadingHour'] = pd.to_datetime(outdoor_temp_df_plot['ReadingHour'])
 
+        # Resample to daily mean for cleaner plot
         merged_temp_for_plot_df = pd.merge(
             zone_temp_df.set_index('ReadingHour').resample('D').mean().reset_index(),
             outdoor_temp_df_plot.set_index('ReadingHour').resample('D').mean().reset_index(),
